@@ -92,16 +92,23 @@ public class RedissonLock extends RedissonBaseLock {
         lock(leaseTime, unit, true);
     }
 
+    /**
+     *
+     * @param leaseTime  续约时间，-1代表不续约，默认续约30s
+     * @param unit
+     * @param interruptibly
+     * @throws InterruptedException
+     */
     private void lock(long leaseTime, TimeUnit unit, boolean interruptibly) throws InterruptedException {
         long threadId = Thread.currentThread().getId();
         Long ttl = tryAcquire(-1, leaseTime, unit, threadId);
-        // lock acquired
+        // 为空说明获取到了锁
         if (ttl == null) {
             return;
         }
-
+        // 如果没获取到锁则 本线程 进入队列等待获取锁/注册监听者
         RFuture<RedissonLockEntry> future = subscribe(threadId);
-        if (interruptibly) {
+        if (interruptibly) { // 默认是false
             commandExecutor.syncSubscriptionInterrupted(future);
         } else {
             commandExecutor.syncSubscription(future);
@@ -136,7 +143,6 @@ public class RedissonLock extends RedissonBaseLock {
         } finally {
             unsubscribe(future, threadId);
         }
-//        get(lockAsync(leaseTime, unit));
     }
     
     private Long tryAcquire(long waitTime, long leaseTime, TimeUnit unit, long threadId) {
@@ -174,6 +180,7 @@ public class RedissonLock extends RedissonBaseLock {
         if (leaseTime != -1) {
             ttlRemainingFuture = tryLockInnerAsync(waitTime, leaseTime, unit, threadId, RedisCommands.EVAL_LONG);
         } else {
+            // 默认看门狗时间
             ttlRemainingFuture = tryLockInnerAsync(waitTime, internalLockLeaseTime,
                     TimeUnit.MILLISECONDS, threadId, RedisCommands.EVAL_LONG);
         }
@@ -201,17 +208,17 @@ public class RedissonLock extends RedissonBaseLock {
 
     <T> RFuture<T> tryLockInnerAsync(long waitTime, long leaseTime, TimeUnit unit, long threadId, RedisStrictCommand<T> command) {
         return evalWriteAsync(getRawName(), LongCodec.INSTANCE, command,
-                "if (redis.call('exists', KEYS[1]) == 0) then " +
-                        "redis.call('hincrby', KEYS[1], ARGV[2], 1); " +
-                        "redis.call('pexpire', KEYS[1], ARGV[1]); " +
-                        "return nil; " +
+                "if (redis.call('exists', KEYS[1]) == 0) then " + // 如果key不存在
+                        "redis.call('hincrby', KEYS[1], ARGV[2], 1); " + // hash的key ，field 为线程uuid+threadId
+                        "redis.call('pexpire', KEYS[1], ARGV[1]); " + // 毫秒为单位
+                        "return nil; " + // 返回空 说明加锁成功
                         "end; " +
-                        "if (redis.call('hexists', KEYS[1], ARGV[2]) == 1) then " +
-                        "redis.call('hincrby', KEYS[1], ARGV[2], 1); " +
-                        "redis.call('pexpire', KEYS[1], ARGV[1]); " +
-                        "return nil; " +
+                        "if (redis.call('hexists', KEYS[1], ARGV[2]) == 1) then " + // 如果加的锁的为本线程
+                        "redis.call('hincrby', KEYS[1], ARGV[2], 1); " + // 将线程获取的次数+1
+                        "redis.call('pexpire', KEYS[1], ARGV[1]); " + // 重置key的过期时间
+                        "return nil; " +// 返回空 说明加锁成功
                         "end; " +
-                        "return redis.call('pttl', KEYS[1]);",
+                        "return redis.call('pttl', KEYS[1]);", // 以ms为单位返回key的过期时间，说明未获取到锁
                 Collections.singletonList(getRawName()), unit.toMillis(leaseTime), getLockName(threadId));
     }
 
@@ -284,7 +291,6 @@ public class RedissonLock extends RedissonBaseLock {
         } finally {
             unsubscribe(subscribeFuture, threadId);
         }
-//        return get(tryLockAsync(waitTime, leaseTime, unit));
     }
 
     protected RFuture<RedissonLockEntry> subscribe(long threadId) {

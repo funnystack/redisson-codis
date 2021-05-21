@@ -317,10 +317,11 @@ public class MasterSlaveConnectionManager implements ConnectionManager {
         } else {
             minTimeout = 100;
         }
-        
+        //启动HashedWheelTimer 100ms 检查一次
         timer = new HashedWheelTimer(new DefaultThreadFactory("redisson-timer"), minTimeout, TimeUnit.MILLISECONDS, 1024, false);
-        
+        // 废弃链接监控
         connectionWatcher = new IdleConnectionWatcher(this, config);
+        // 发布订阅服务
         subscribeService = new PublishSubscribeService(this, config);
     }
 
